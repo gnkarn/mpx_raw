@@ -4,9 +4,9 @@
 #define wifi_ssid "WIFIgusPb"
 #define wifi_password "xxx"
 
-#define mqtt_server "192.168.0.60"
-#define mqtt_user "homeassistant"
-#define mqtt_password "2394"
+#define mqtt_server "192.168.x.xx"
+#define mqtt_user "xxx"
+#define mqtt_password "xxxx"
 
 #define alarm_topic "alarm/zone"
 

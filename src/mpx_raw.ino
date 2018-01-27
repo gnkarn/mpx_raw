@@ -37,7 +37,7 @@ modified by gnk for ESP8266 Node nodemcuv2
 #define maxLen 34
 
 // Uncomment to enable printing out nice debug messages.
-// #define DEBUG
+#define DEBUG
 
 // Define where debug output will be printed.
 #define DEBUG_PRINTER Serial
@@ -207,3 +207,35 @@ void rxIR_Interrupt_Handler() {
   irBuffer[x++] = micros(); //just continually record the time-stamp of signal transitions
 
 }
+
+// Inspect pulses and determine which ones are 0 (high state cycle count < low
+  // state cycle count), or 1 (high state cycle count > low state cycle count).
+int  decode_mpx(){
+    // Reset 16 bits of received data to zero.
+  data[0] = data[1]  = 0;
+    for (int i=0; i<16; ++i) {
+      uint32_t lowCycles  = delta[2*i];
+     uint32_t highCycles = delta[2*i+1];
+
+
+      if ((highCycles == 0)) {
+        DEBUG_PRINTLN(F("Timeout waiting for pulse."));
+        //_lastresult = false;
+        return; //_lastresult;
+      }
+      data[i/8] <<= 1;
+      // Now compare the low and high cycle times to see if the bit is a 0 or 1.
+      if (highCycles > BitOneTicks) {
+        // High cycles are greater than 50us low cycle count, must be a 1.
+        data[i/8] |= 1;
+        //DEBUG_PRINTLN(highCycles); // debug  sacar
+
+      }
+      // Else high cycles are less than (or equal to, a weird case) the 50us low
+      // cycle count so this must be a zero.  Nothing needs to be changed in the
+      // stored data.
+
+    }
+    DEBUG_PRINT(data[0]); DEBUG_PRINT("_");DEBUG_PRINTLN(data[1]); // debug gnk
+    DEBUG_PRINT(data[0], HEX);DEBUG_PRINT("_");DEBUG_PRINTLN(data[1], HEX); // debug gnk
+  }
