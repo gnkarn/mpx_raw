@@ -32,7 +32,7 @@ Signal Out   ->  Digital Pin 2
 #define maxLen 34
 
 // Uncomment to enable printing out nice debug messages.
-#define DEBUG
+// #define DEBUG
 
 // Define where debug output will be printed.
 #define DEBUG_PRINTER Serial
@@ -51,15 +51,88 @@ volatile  uint32_t irBuffer[maxLen]; //stores timings - volatile because changed
 uint16_t delta[maxLen]; // contiene los tiempos netos de cada pulso en lugar del tiempo absoluto
 volatile unsigned int x = 0; //Pointer thru irBuffer - volatile because changed by ISR
 
+String code =""; // contiene el string del ultimo codigo de 16 bits
+int zona = ""; // guarda el codigo de la zona detectada
 
 uint8_t data[2]; //vector de resultado
 #define BitOneTicks 2400  // si es mayor que 2400 ms es un uno
 #define BitZeroTicks 1400  // si es menor que 1400 ms es un cero
+#define max_ticks 4000 // si un pulso es mayor que este valor , entonces hay Error de captura
+
+// asigna una zona en caso de detectar un codigo especifico
+int detectZona ( String code1) {
+  if ( code1 == "1615" ){ return 1 ; }
+  else if (code1 == "9630") { return 3 ;}
+  else if (code1 == "1640") { return 4 ;}
+  else if (code1 == "9653") { return 5 ;}
+  else if (code1 == "9665") { return 6 ;}
+  else {return 0 ;}
+}
+
+
+// Inspect pulses and determine which ones are 0 (high state cycle count < low
+  // state cycle count), or 1 (high state cycle count > low state cycle count).
+  void decode_mpx(){
+    // Reset 16 bits of received data to zero.
+  data[0] = data[1]  = 0;
+    for (int i=0; i<16; ++i) {
+      uint32_t lowCycles  = delta[2*i];
+     uint32_t highCycles = delta[2*i+1];
+
+
+      if ((highCycles == 0)|| (lowCycles==0)) {
+        DEBUG_PRINTLN(F("Timeout waiting for pulse."));
+        //_lastresult = false;
+        return; //_lastresult;
+      }
+
+      // un pulso anormalmente largo en medio de la trama ?
+       if ( delta[i-1] > max_ticks) {
+        DEBUG_PRINTLN(F("pulso muy largo "));
+        //_lastresult = false;
+        return; //_lastresult;
+      }
+
+      data[i/8] <<= 1;
+      // Now compare the low and high cycle times to see if the bit is a 0 or 1.
+      if (highCycles > BitOneTicks) {
+        // High cycles are greater than 50us low cycle count, must be a 1.
+        data[i/8] |= 1;
+        //DEBUG_PRINTLN(highCycles); // debug  sacar
+
+      }
+      // Else high cycles are less than (or equal to, a weird case) the 50us low
+      // cycle count so this must be a zero.  Nothing needs to be changed in the
+      // stored data.
+
+    }
+    String stringOne =  String(data[0], HEX);
+    String stringTwo = String(data[1],HEX);
+    if (stringOne.length() == 1)  {stringOne = "0"+stringOne ;};
+    if (stringTwo.length() ==1 ) {stringTwo = "0"+stringTwo ;};
+    stringOne.toUpperCase();
+    stringTwo.toUpperCase();
+    code = stringOne + stringTwo ;
+    // Serial.println (code); // DEBUG
+
+    zona = detectZona(code) ;
+    if (zona != 0) {
+      Serial.print("Z");
+      Serial.println (zona );
+    }
+
+
+    DEBUG_PRINT(data[0]); DEBUG_PRINT("_");DEBUG_PRINT(data[1]); // debug gnk
+    DEBUG_PRINT(" || ");
+    DEBUG_PRINT(data[0], HEX);DEBUG_PRINT("_");DEBUG_PRINTLN(data[1], HEX); // debug gnk
+
+  }
 
 
 
 void setup() {
   Serial.begin(115200); //change BAUD rate as required
+  Serial.println( " decodifica protocolo mpx X28: ") ;
   attachInterrupt(0, rxIR_Interrupt_Handler, CHANGE);//set up ISR for receiving IR signal
 }
 
@@ -67,31 +140,35 @@ void loop() {
   // put your main code here, to run repeatedly:
 
   //Serial.println(F("Press the button on the remote now - once only"));
-  delay(1000); // pause 5 secs
+  delay(100); // pause 500 m secs subirlo en caso de dubug a 500 ms y bajarlo a 50 para produccion
 
-  if (x==34) { //if a signal is captured
-    digitalWrite(LEDPIN, HIGH);//visual indicator that signal received
-    Serial.println();
-    Serial.print(F("Raw: (")); //dump raw header format - for library
-    Serial.print((x - 1));
-    Serial.print(F(") "));
+  if (x=34) { //if a signal is captured , 32 transiciones son 16 bits
     detachInterrupt(0);//stop interrupts & capture until finshed here
+    digitalWrite(LEDPIN, HIGH);//visual indicator that signal received
+    DEBUG_PRINTLN();
+    DEBUG_PRINT(F("Raw: (")); //dump raw header format - for library
+    DEBUG_PRINT((x - 1));
+    DEBUG_PRINT(F(") "));
 
-    for (unsigned int i = 1; i < x; i++) { //now dump the times
+
+    for (int i = 1; i < x; i++) { //now dump the times
       if (!(i & 0x1)) {
-        Serial.print(F("-"));
+        DEBUG_PRINT(F("-"));
 
       }
 
-      Serial.print(irBuffer[i] - irBuffer[i - 1]);
+
       delta[i-1]= irBuffer[i] - irBuffer[i - 1];
 
-      Serial.print(F(", "));
+
+         DEBUG_PRINT(delta[i-1]);
+
+      DEBUG_PRINT(F(", "));
     }
 
     x = 0;
-    Serial.println();
-    Serial.println();
+    //Serial.println();
+    DEBUG_PRINTLN();
     decode_mpx(); // imprime resultado
     digitalWrite(LEDPIN, LOW);//end of visual indicator, for this time
     attachInterrupt(0, rxIR_Interrupt_Handler, CHANGE);//re-enable ISR for receiving IR signal
@@ -106,35 +183,3 @@ void rxIR_Interrupt_Handler() {
   irBuffer[x++] = micros(); //just continually record the time-stamp of signal transitions
 
 }
-
-// Inspect pulses and determine which ones are 0 (high state cycle count < low
-  // state cycle count), or 1 (high state cycle count > low state cycle count).
-int  decode_mpx(){
-    // Reset 16 bits of received data to zero.
-  data[0] = data[1]  = 0;
-    for (int i=0; i<16; ++i) {
-      uint32_t lowCycles  = delta[2*i];
-     uint32_t highCycles = delta[2*i+1];
-
-
-      if ((highCycles == 0)) {
-        DEBUG_PRINTLN(F("Timeout waiting for pulse."));
-        //_lastresult = false;
-        return; //_lastresult;
-      }
-      data[i/8] <<= 1;
-      // Now compare the low and high cycle times to see if the bit is a 0 or 1.
-      if (highCycles > BitOneTicks) {
-        // High cycles are greater than 50us low cycle count, must be a 1.
-        data[i/8] |= 1;
-        //DEBUG_PRINTLN(highCycles); // debug  sacar
-
-      }
-      // Else high cycles are less than (or equal to, a weird case) the 50us low
-      // cycle count so this must be a zero.  Nothing needs to be changed in the
-      // stored data.
-
-    }
-    DEBUG_PRINT(data[0]); DEBUG_PRINT("_");DEBUG_PRINTLN(data[1]); // debug gnk
-    DEBUG_PRINT(data[0], HEX);DEBUG_PRINT("_");DEBUG_PRINTLN(data[1], HEX); // debug gnk
-  }
