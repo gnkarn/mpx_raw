@@ -26,6 +26,10 @@ Signal Out   ->  Digital Pin 2
 (If using a 3V Arduino, you may connect V+ to +3V)
 2018 _ Raw_ir modified by GNK to decode mpx 16 bit code
 */
+#include <ESP8266WiFi.h>
+#include <Wire.h>
+#include <PubSubClient.h>
+#include <mpx_mqtt>
 
 #define LEDPIN 13
 //you may increase this value on Arduinos with greater than 2k SRAM
@@ -47,34 +51,36 @@ Signal Out   ->  Digital Pin 2
   #define DEBUG_PRINTLN(...) {}
 #endif
 
+// GLOBAL
 volatile  uint32_t irBuffer[maxLen]; //stores timings - volatile because changed by ISR
 uint16_t delta[maxLen]; // contiene los tiempos netos de cada pulso en lugar del tiempo absoluto
 volatile unsigned int x = 0; //Pointer thru irBuffer - volatile because changed by ISR
 
 String code =""; // contiene el string del ultimo codigo de 16 bits
-int zona = ""; // guarda el codigo de la zona detectada
+const char* zona = "0"; // guarda el codigo de la zona detectada
 
 uint8_t data[2]; //vector de resultado
-#define BitOneTicks 2400  // si es mayor que 2400 ms es un uno
-#define BitZeroTicks 1400  // si es menor que 1400 ms es un cero
-#define max_ticks 4000 // si un pulso es mayor que este valor , entonces hay Error de captura
+#define BitOneTicks   2400  // si es mayor que 2400 ms es un uno
+#define BitZeroTicks  1400  // si es menor que 1400 ms es un cero
+#define max_ticks     4000 // si un pulso es mayor que este valor , entonces hay Error de captura
+
+// FUNCTIONS
 
 // asigna una zona en caso de detectar un codigo especifico
-int detectZona ( String code1) {
-  if ( code1 == "1615" ){ return 1 ; }
-  else if (code1 == "9630") { return 3 ;}
-  else if (code1 == "1640") { return 4 ;}
-  else if (code1 == "9653") { return 5 ;}
-  else if (code1 == "9665") { return 6 ;}
-  else {return 0 ;}
+const char* detectZona ( String code1) {
+  if ( code1 == "1615" ){ return "1" ; }
+  else if (code1 == "9630") { return "3" ;}
+  else if (code1 == "1640") { return "4" ;}
+  else if (code1 == "9653") { return "5" ;}
+  else if (code1 == "9665") { return "6" ;}
+  else {return "0" ;}
 }
 
 
 // Inspect pulses and determine which ones are 0 (high state cycle count < low
-  // state cycle count), or 1 (high state cycle count > low state cycle count).
-  void decode_mpx(){
-    // Reset 16 bits of received data to zero.
-  data[0] = data[1]  = 0;
+// state cycle count), or 1 (high state cycle count > low state cycle count).
+  const char* decode_mpx(){
+    data[0] = data[1]  = 0;    // Reset 16 bits of received data to zero.
     for (int i=0; i<16; ++i) {
       uint32_t lowCycles  = delta[2*i];
      uint32_t highCycles = delta[2*i+1];
@@ -83,14 +89,14 @@ int detectZona ( String code1) {
       if ((highCycles == 0)|| (lowCycles==0)) {
         DEBUG_PRINTLN(F("Timeout waiting for pulse."));
         //_lastresult = false;
-        return; //_lastresult;
+        return zona; //_lastresult;
       }
 
       // un pulso anormalmente largo en medio de la trama ?
        if ( delta[i-1] > max_ticks) {
         DEBUG_PRINTLN(F("pulso muy largo "));
         //_lastresult = false;
-        return; //_lastresult;
+        return zona; //_lastresult;
       }
 
       data[i/8] <<= 1;
@@ -109,14 +115,14 @@ int detectZona ( String code1) {
     String stringOne =  String(data[0], HEX);
     String stringTwo = String(data[1],HEX);
     if (stringOne.length() == 1)  {stringOne = "0"+stringOne ;};
-    if (stringTwo.length() ==1 ) {stringTwo = "0"+stringTwo ;};
+    if (stringTwo.length() == 1)  {stringTwo = "0"+stringTwo ;};
     stringOne.toUpperCase();
     stringTwo.toUpperCase();
     code = stringOne + stringTwo ;
     // Serial.println (code); // DEBUG
-
     zona = detectZona(code) ;
-    if (zona != 0) {
+
+    if (zona != "0") {
       Serial.print("Z");
       Serial.println (zona );
     }
@@ -126,23 +132,47 @@ int detectZona ( String code1) {
     DEBUG_PRINT(" || ");
     DEBUG_PRINT(data[0], HEX);DEBUG_PRINT("_");DEBUG_PRINTLN(data[1], HEX); // debug gnk
 
+    return zona ;
   }
 
 
 
-void setup() {
-  Serial.begin(115200); //change BAUD rate as required
-  Serial.println( " decodifica protocolo mpx X28: ") ;
-  attachInterrupt(0, rxIR_Interrupt_Handler, CHANGE);//set up ISR for receiving IR signal
-}
+  void setup() {
+    Serial.begin(115200);
+    setup_wifi();
+    client.setServer(mqtt_server, 1883);
+    Serial.println( " decodifica protocolo mpx X28: ") ;
+    attachInterrupt(0, rxIR_Interrupt_Handler, CHANGE);//set up ISR for receiving IR signal
+
+    pinMode(mpxPin, INPUT_PULLUP);
+    digitalWrite(LEDPIN,HIGH);
+    delay(1000);
+    digitalWrite(LEDPIN,LOW);
+
+  } // fin setup
 
 void loop() {
-  // put your main code here, to run repeatedly:
+  if (!client.connected()) {
+    reconnect();
+  }
+  client.loop();
 
-  //Serial.println(F("Press the button on the remote now - once only"));
-  delay(100); // pause 500 m secs subirlo en caso de dubug a 500 ms y bajarlo a 50 para produccion
+  long now = millis();
+  if (now - lastMsg > 1000) {
+    lastMsg = now;
+    delay(100); // pause 500 m secs subirlo en caso de dubug a 500 ms y bajarlo a 50 para produccion
 
-  if (x=34) { //if a signal is captured , 32 transiciones son 16 bits
+    if (readDecodeMpx() != 0) {
+      client.publish(alarm_topic , zona);
+    }
+  }
+} // loop end
+
+// --------------------------- read and decode mpx ------------------------
+bool readDecodeMpx(){
+  bool flag = false;
+  if (x==34) { //if a signal is captured , 32 transiciones son 16 bits
+    flag = true;
     detachInterrupt(0);//stop interrupts & capture until finshed here
     digitalWrite(LEDPIN, HIGH);//visual indicator that signal received
     DEBUG_PRINTLN();
@@ -150,32 +180,25 @@ void loop() {
     DEBUG_PRINT((x - 1));
     DEBUG_PRINT(F(") "));
 
-
-    for (int i = 1; i < x; i++) { //now dump the times
+    for (unsigned int i = 1; i < x; i++) { //now dump the times
       if (!(i & 0x1)) {
         DEBUG_PRINT(F("-"));
-
       }
-
-
       delta[i-1]= irBuffer[i] - irBuffer[i - 1];
-
-
          DEBUG_PRINT(delta[i-1]);
-
       DEBUG_PRINT(F(", "));
     }
-
     x = 0;
     //Serial.println();
     DEBUG_PRINTLN();
+
     decode_mpx(); // imprime resultado
+
     digitalWrite(LEDPIN, LOW);//end of visual indicator, for this time
     attachInterrupt(0, rxIR_Interrupt_Handler, CHANGE);//re-enable ISR for receiving IR signal
 
-
   }
-
+  return flag ;
 }
 
 void rxIR_Interrupt_Handler() {
