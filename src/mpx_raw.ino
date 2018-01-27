@@ -25,6 +25,7 @@ GND          ->  GND
 Signal Out   ->  Digital Pin 2
 (If using a 3V Arduino, you may connect V+ to +3V)
 2018 _ Raw_ir modified by GNK to decode mpx 16 bit code
+modified by gnk for ESP8266 Node nodemcuv2
 */
 #include <ESP8266WiFi.h>
 #include <Wire.h>
